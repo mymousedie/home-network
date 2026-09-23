@@ -1,0 +1,54 @@
+# --- Secrets & sensitive configs (never commit these) ---
+*.key
+*.pem
+*.p12
+*.pfx
+wg0.conf
+*.ovpn
+.env
+.env.*
+**/secrets/
+**/*credentials*
+**/*password*
+
+# Redact these before committing; keep only sanitized copies
+configs/opnsense/*-raw.xml
+
+# --- Python (collector) ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+*.sqlite3
+*.db
+
+# --- Node / React (dashboard) ---
+node_modules/
+dist/
+build/
+.next/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Docker ---
+*.env.docker
+docker-compose.override.yml
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+*.swp
+
+# --- VirtualBox artifacts (if VM files ever land in the repo folder) ---
+*.vdi
+*.vbox
+*.vbox-prev
