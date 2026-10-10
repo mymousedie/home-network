@@ -100,19 +100,34 @@ Decided against simulating this fully inside VirtualBox, since nested
 virtual VLAN tagging wouldn't reflect the real trunk/access-port setup and
 risked wasted effort on VM networking quirks unrelated to the actual design.
 
-**Next steps once hardware arrives:**
-- Wire USB adapter to switch port 1 (trunk), configure port VLAN
-  memberships on the TL-SG108E
-- Attach OPNsense's LAN adapter to the USB adapter (bridged) with
-  promiscuous mode enabled
-- Confirm a real client on each VLAN gets the correct 10.10.x.x lease
-- Test IoT → Trusted isolation with ping/nmap
-- Log results here
+2026-10-09 — Switch arrived; physical VLAN configuration
 
-## In the meantime
+Step: TP-Link TL-SG108E switch arrived. Connected existing devices: router → port 1, main desktop PC → port 2, laptop (built-in NIC, temporary) → port 8, for initial switch management access.
 
-- [ ] Ping-tested inter-VLAN routing directly from OPNsense
-      (Interfaces > Diagnostics > Ping, source TRUSTED → 10.10.20.1, etc.)
-- [ ] Drafted firewall isolation rules for IOT and LAB (not yet verifiable
-      without real client traffic, but logic is in place)
-- [ ] First OPNsense config backup exported and redacted
+Issue: Tried reaching the switch's default management IP (192.168.0.1) by manually setting the laptop's Ethernet adapter to a static IP (192.168.0.10/24). Got ERR_CONNECTION_TIMED_OUT in the browser and 100% packet loss on ping. Cause: The switch was actually already reachable on the home network's real subnet (192.168.50.x) via DHCP from the ASUS router, since the switch, router, and desktop were all already connected together. The static 192.168.0.10 IP put the laptop on a completely different, unrelated subnet, so 192.168.0.1 was never going to be reachable from that adapter. ipconfig confirmed the laptop's Ethernet adapter still had a 192.168.50.133 DHCP address the whole time, not the static IP I thought I'd set. Fix: Abandoned the manual static-IP approach. Reverted the adapter back to Automatic (DHCP), then accessed the switch directly at its actual DHCP-assigned address shown in its own System Info page (192.168.50.248). Lesson: Don't assume a device's documented default IP applies once it's already live on an existing network with its own DHCP server — check where it actually landed first (switch's own System Info page, or the router's DHCP client list) rather than reaching for the factory-default address.
+
+Step: Set a static management IP on the switch itself (System > IP Setting): 192.168.50.250, matching the home network's real range so it won't drift again.
+
+Step: Mapped physical ports to actual connected devices: port 1 = router, port 2 = desktop PC, port 8 = laptop (temporary management-only connection). Reserved port 7 for the OPNsense trunk (laptop's USB adapter), since ports 1 and 2 were already in use — differs from the original plan, which assumed the trunk would be on port 1.
+
+Step: Configured 802.1Q VLANs (System > VLAN > 802.1Q VLAN):
+
+Enabled 802.1Q VLAN mode globally
+VLAN 10 (Trusted): port 3 untagged, port 7 tagged
+VLAN 20 (IoT): port 4 untagged, port 7 tagged
+VLAN 30 (Lab): port 5 untagged, port 7 tagged
+Default VLAN 1 retained all ports untagged (router/desktop/laptop management unaffected)
+
+Step: Checked 802.1Q PVID Setting — ports 3/4/5 had already picked up PVID 10/20/30 automatically from the VLAN membership step above; no manual PVID changes were needed. Confirmed port 1, 2, 7, 8 remained at PVID 1. Note: On this firmware (TL-SG108E v6, firmware 1.0.0 build 20250710), setting a port as an untagged member of a VLAN auto-updates its PVID — this isn't true on all managed switches, so it was worth explicitly verifying rather than assuming.
+
+Result: Switch-side VLAN configuration matches the design. Updated docs/ip-vlan-plan.md with the as-built port layout (trunk on port 7, not port 1) and the real management IP scheme.
+
+Next: Move laptop's USB Ethernet adapter from port 8 to port 7 (the trunk), bridge OPNsense's LAN adapter to that USB adapter in VirtualBox with promiscuous mode enabled, and run the first real client VLAN test.
+
+Pending
+ Move USB adapter to switch port 7, bridge OPNsense LAN to it in VirtualBox (promiscuous mode: Allow All)
+ Confirm a real client on each VLAN gets the correct 10.10.x.x lease (check Services > Kea DHCP > Leases DHCPv4)
+ Test IoT → Trusted isolation with ping/nmap
+ Ping-tested inter-VLAN routing directly from OPNsense (Interfaces > Diagnostics > Ping, source TRUSTED → 10.10.20.1, etc.)
+ Drafted firewall isolation rules for IOT and LAB (not yet verifiable without real client traffic, but logic is in place)
+ First OPNsense config backup exported and redacted
