@@ -9,12 +9,27 @@ switch, and DHCP configs should all match this.
 | VLAN ID | Name | Subnet | Gateway | OPNsense Interface | Purpose |
 |---|---|---|---|---|---|
 | 1 | Default/Management | 192.168.50.0/24 | 192.168.50.1 | N/A (ASUS-managed) | Router, desktop, switch mgmt |
-| 10 | Trusted | 10.10.10.0/24 | 10.10.10.1 | TRUSTED (OPT1) | Personal/trusted devices |
-| 20 | IoT | 10.10.20.0/24 | 10.10.20.1 | IOT (OPT2) | Smart TVs, phones, untrusted devices |
-| 30 | Lab | 10.10.30.0/24 | 10.10.30.1 | LAB (OPT3) | Test clients, experiments, VMs |
+| 10 | Trusted | 10.10.10.0/24 | 10.10.10.1 | Trusted (em1) | Personal/trusted devices |
+| 20 | IoT | 10.10.20.0/24 | 10.10.20.1 | IoT (em2) | Smart TVs, phones, untrusted devices |
+| 30 | Lab | 10.10.30.0/24 | 10.10.30.1 | Lab (em3) | Test clients, experiments, VMs |
 
-All VLANs are tagged (802.1Q) on the trunk between OPNsense and the managed
-switch (port 7), with parent interface `em1` (LAN NIC) on the OPNsense VM.
+**Note:** VLAN IDs/tags above describe the switch-side VLAN each subnet
+lives on. On the OPNsense/host side there is no tagging anymore — each
+interface is a dedicated untagged physical link (see Physical Port Layout
+and Interface Naming Reference below).
+
+**As-built note:** The original design below described a single 802.1Q
+tagged trunk carrying all three VLANs over one physical link (port 7). This
+was abandoned after a VirtualBox-on-Windows host-bridging limitation made
+tagged frames undeliverable to the guest VM (confirmed via Wireshark —
+frames reached the host NIC intact but never reached OPNsense; see
+`docs/testing-log.md`). The as-built network instead gives each VLAN its
+own dedicated **untagged** physical link from a separate host NIC into its
+own switch port, each bridged individually into OPNsense. The logical
+VLAN/subnet design (IDs, ranges, policy) is unchanged — only the physical
+delivery method changed. See the "AS BUILT" port table and Interface
+Naming Reference below for the current wiring.
+
 VLAN 1 remains the switch's default/native VLAN, carrying the existing home
 network (router, desktop) — kept separate from the lab subnets below.
 
@@ -52,24 +67,35 @@ requires this in addition to defining the subnet pools).
 The existing 192.168.50.0/24 network (VLAN 1) continues to use the ASUS
 router's own DHCP server — untouched by this project.
 
-## Physical / Switch Port Layout (TP-Link TL-SG108E) — AS BUILT
+## Physical / Switch Port Layout (TP-Link TL-SG108E) — AS BUILT (current, v2)
+
+Supersedes the original single-trunk design (see Change Log). Each VLAN now
+has its own dedicated untagged physical link from the OPNsense host into
+the switch, instead of one tagged trunk carrying all three.
 
 | Port | Device | VLAN membership | Tagged/Untagged | PVID |
 |---|---|---|---|---|
 | 1 | ASUS router | 1 (default) | Untagged | 1 |
 | 2 | Main desktop PC | 1 (default) | Untagged | 1 |
-| 3 | Trusted test device | 10 | Untagged | 10 |
-| 4 | IoT test device | 20 | Untagged | 20 |
-| 5 | Lab test device | 30 | Untagged | 30 |
-| 6 | Unused / spare | 1 (default) | — | 1 |
-| 7 | **Trunk** — laptop USB adapter → OPNsense LAN | 1, 10, 20, 30 | Tagged (all four) | 1 |
-| 8 | Laptop built-in NIC (switch management only) | 1 (default) | Untagged | 1 |
+| 3 | Trusted test device (spare laptop) | 10 | Untagged | 10 |
+| 4 | IoT test device (spare laptop) | 20 | Untagged | 20 |
+| 5 | Lab test device (spare laptop) | 30 | Untagged | 30 |
+| 6 | **OPNsense IoT link** — USB-Ethernet adapter #1 → em2 | 20 | Untagged | 20 |
+| 7 | **OPNsense Trusted link** — host's built-in Realtek NIC → em1 | 10 | Untagged | 10 |
+| 8 | **OPNsense Lab link** — USB-Ethernet adapter #2 → em3 | 30 | Untagged | 30 |
 
-This differs from the original plan (trunk on port 1) — router and desktop
-were already connected to ports 1 and 2 before VLAN configuration began, so
-the trunk was assigned to port 7 instead to avoid disrupting existing
-connectivity. Port 8 carries only switch-management traffic over VLAN 1,
-separate from the actual OPNsense trunk on port 7.
+Each OPNsense-facing port (6, 7, 8) is bridged in VirtualBox to one physical
+host NIC with Promiscuous Mode "Allow All," then assigned directly to its
+OPNsense interface — no VLAN tagging or sub-interfaces are involved on
+these links at all. Ports 3/4/5 remain untagged client test-access ports on
+their respective VLANs, used to verify policy with real standalone
+hardware.
+
+**Historical note:** An earlier revision of this doc attributed port 7 to a
+USB adapter; it was always the host's built-in Realtek NIC connected by
+plain Ethernet, carrying a single 802.1Q tagged trunk. That trunk design
+(and the OPT4/management interface that went with it) has been fully
+retired — see Change Log.
 
 Switch management IP: `192.168.50.250` (static, set outside the router's
 DHCP range).
@@ -95,32 +121,44 @@ A custom **RFC1918** firewall alias was created (`10.0.0.0/8`,
 `172.16.0.0/12`, `192.168.0.0/16`) since OPNsense has no built-in alias for
 this.
 
-**Verified 2026-10-17** via a VLAN-tagged test client (Client jaja, bridged
-to the trunk NIC with 802.1Q sub-interfaces for VLAN 20 and VLAN 30): DHCP
-leasing, DNS resolution, internet access, and blocking of OPT4/LAN/Trusted/
-cross-VLAN destinations all confirmed working exactly as designed. See
-`docs/testing-log.md` for full test results and the two significant issues
-found and fixed along the way (NIC driver VLAN tag stripping setting, and
-a Kea DHCP vs. Dnsmasq port-67 conflict).
+**Verified 2026-10-17** via a VLAN-tagged VM test client (Client jaja) over
+the original single-trunk design: DHCP leasing, DNS resolution, internet
+access, and blocking of OPT4/LAN/Trusted/cross-VLAN destinations all
+confirmed working exactly as designed.
 
-## Interface Naming Reference
+**Re-verified 2026-10-25/26** end-to-end on **real physical client
+hardware** (separate spare laptops on switch ports 3/4/5) after the
+topology was rebuilt around per-VLAN untagged links: Trusted, IoT, and Lab
+all confirmed — correct DHCP lease, own-gateway and cross-VLAN traffic
+blocked as designed, DNS and internet access working. See
+`docs/testing-log.md` for full test results, including the VirtualBox
+host-bridging limitation that prompted the topology rebuild and the issues
+found and fixed along the way.
+
+## Interface Naming Reference — AS BUILT (current, v2)
 
 | Physical/Logical | OPNsense Name | Description |
 |---|---|---|
-| em0 | WAN | Upstream to ASUS RT-AX5400 (NAT) |
-| em1 | LAN | Trunk to managed switch (port 7) |
-| vlan0.1 on em1 | OPT1 / TRUSTED | 10.10.10.0/24 |
-| vlan0.2 on em1 | OPT2 / IOT | 10.10.20.0/24 |
-| vlan0.3 on em1 | OPT3 / LAB | 10.10.30.0/24 |
-| em2 | OPT4 / MGMT | 192.168.2.0/24 — internal management interface, added to reach the GUI once LAN was dedicated to the physical trunk |
+| em0 | WAN | VirtualBox NAT adapter (software NAT to the host's real internet connection) |
+| em1 | Trusted | Host's built-in Realtek NIC, bridged → switch port 7, untagged, VLAN 10. 10.10.10.0/24 |
+| em2 | IoT | USB-to-Ethernet adapter #1, bridged → switch port 6, untagged, VLAN 20. 10.10.20.0/24 |
+| em3 | Lab | USB-to-Ethernet adapter #2, bridged → switch port 8, untagged, VLAN 30. 10.10.30.0/24 |
+
+**Retired:** `vlan0.1`/`vlan0.2`/`vlan0.3` (VLAN sub-interfaces on a single
+tagged trunk) and the `OPT4`/management interface (`192.168.2.0/24`,
+internal-network-only) no longer exist. OPT4 was originally added to keep
+GUI access available while LAN was fully dedicated to the trunk; once the
+trunk was retired, GUI access is reached directly via the Trusted
+interface instead, and OPT4 was deleted after being unassigned.
 
 ## Change Log
 
 | Date | Change |
 |---|---|
-| 2026-09-XX | Initial plan drafted (Phase 1) |
-| 2026-09-XX | VLAN interfaces created and corrected (parent interface fix — see testing-log.md) |
-| 2026-09-XX | Kea DHCPv4 subnets and interface bindings configured |
+| 2026-09-23 | Initial plan drafted (Phase 1) |
+| 2026-09-24 | VLAN interfaces created and corrected (parent interface fix — see testing-log.md) |
+| 2026-09-24 | Kea DHCPv4 subnets and interface bindings configured |
 | 2026-10-09 | Physical switch configured; port layout and management VLAN updated to match as-built setup |
 | 2026-10-14 | OPT4 management interface added (em2, Internal Network `intnet`) so the GUI stays reachable with LAN dedicated to the physical trunk |
 | 2026-10-16/17 | Firewall rules for Trusted/IoT/Lab built and fully verified with a VLAN-tagged test client; fixed a NIC driver VLAN-tagging setting and a Kea DHCP vs. Dnsmasq port-67 conflict along the way — see testing-log.md |
+| 2026-10-25/26 | **Topology rebuild.** Root-caused a VirtualBox-on-Windows bridging limitation that silently dropped 802.1Q-tagged frames between the host NIC and the guest VM (confirmed via Wireshark). Abandoned the single tagged-trunk design; rebuilt the network so each VLAN has its own dedicated untagged physical link (switch ports 6/7/8 → em2/em1/em3) via two added USB-to-Ethernet adapters. Retired `vlan0.x` sub-interfaces and the OPT4/management interface. Re-verified Trusted/IoT/Lab end-to-end on real physical client hardware. Full narrative in testing-log.md. |
