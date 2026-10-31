@@ -1,0 +1,21 @@
+{
+  "db_path": "netmon.db",
+  "interval_seconds": 30,
+  "devices": [
+    {"name": "Trusted gateway", "ip": "10.10.10.1", "vlan": 10},
+    {"name": "IoT gateway",     "ip": "10.10.20.1", "vlan": 20},
+    {"name": "Lab gateway",     "ip": "10.10.30.1", "vlan": 30},
+    {"name": "ASUS router",     "ip": "192.168.50.1", "vlan": 1},
+    {"name": "Managed switch",  "ip": "192.168.50.250", "vlan": 1}
+  ],
+  "internet": {
+    "ping_targets": ["8.8.8.8", "1.1.1.1"],
+    "dns_server": "10.10.10.1",
+    "dns_name": "google.com"
+  },
+  "syslog": {
+    "enabled": true,
+    "bind": "0.0.0.0",
+    "port": 5514
+  }
+}

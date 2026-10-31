@@ -682,5 +682,45 @@ Trusted client surfaced several additional issues:
 
 - [x] Real physical (non-VM) client test on switch ports 3/4/5 for all
       three VLANs — complete
-- [ ] OPNsense config backup exported and redacted
-- [ ] Phase 3: monitoring backend
+- [x] OPNsense config backup exported and pushed
+- [x] Phase 3: monitoring backend — collector written, unit-tested and verified live (below)
+
+## 2026-10-28 — Phase 3: collector unit tests
+
+Built `collector/` (ping/DNS checks, SQLite storage, UDP syslog listener for
+OPNsense `filterlog`, summary report). `python -m unittest tests.test_netmon`:
+19 tests, all passing (1 skipped: live loopback ping, no `ping` binary in the
+build container).
+
+Bugs found and fixed by the tests:
+
+- **Syslog parser returned nothing for real OPNsense lines.** The first
+  version looked for `": "` after `filterlog`, which only exists in RFC 3164
+  format. OPNsense's RFC 5424 output has a pid, msgid and structured-data
+  block instead. The parser now handles both.
+- **DNS test hung.** The test monkeypatched `socket.sendto` globally, so the
+  fake DNS server's replies were redirected back to itself. The patch now
+  only redirects traffic aimed at port 53.
+
+## 2026-10-31 — Phase 3: first live collector run
+
+Ran `python -m netmon.runner` on the Windows host with OPNsense remote syslog
+(UDP 5514, application `filter`) pointed at the host's Trusted IP, plus an
+inbound Windows Defender Firewall rule for UDP 5514.
+
+`python -m netmon.report --hours 1` after roughly 10 collection cycles:
+
+| Signal | Result |
+|---|---|
+| Device checks | All five devices recorded 10 checks each. Uptime ranged from 40% (IoT gateway, avg 664 ms) to 80% (Lab gateway); the 192.168.50.x devices showed 50% |
+| Internet health | 8.8.8.8: 50% loss, avg 33 ms; 1.1.1.1: 100% loss; avg DNS lookup 317 ms |
+| Firewall events | Received over syslog and parsed: em0 pass 20775 / block 59, em1 pass 17 / block 4 |
+
+**Conclusion:** the full pipeline works end to end: ping and DNS checks,
+SQLite storage, remote syslog receive, filterlog parse and report. The
+sub-100% uptime and loss figures are consistent with the known
+Verizon 5G + double-NAT path and the host sitting on three bridged NICs, but
+the first run was short and overlapped VM start-up, so it is not a baseline.
+No em2 or em3 events yet because no client was generating traffic on those
+VLANs. Next: a longer run for a real baseline, and a Lab client to produce
+em3 block entries.

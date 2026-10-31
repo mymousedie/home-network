@@ -72,7 +72,7 @@ reachability, and blocking of cross-VLAN/gateway traffic all confirmed. See
       as-built network instead gives each VLAN its own dedicated untagged
       physical link into OPNsense. See `docs/testing-log.md` for full
       results.
-- [ ] Phase 3 — Monitoring backend (Python collector, database)
+- [x] Phase 3 — Monitoring backend (Python collector, SQLite) — complete (`collector/`): 19 unit tests pass, and a live run on the lab recorded device and internet checks plus OPNsense firewall events received over remote syslog
 - [ ] Phase 4 — React dashboard + alerting
 - [ ] Phase 5 — Config backup automation + final documentation
 
