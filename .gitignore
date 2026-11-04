@@ -55,3 +55,6 @@ desktop.ini
 
 # --- OPNsense backup script (holds API key/secret) ---
 backups/backup.json
+
+*.db-wal
+*.db-shm
