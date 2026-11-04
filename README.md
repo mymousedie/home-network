@@ -73,7 +73,7 @@ reachability, and blocking of cross-VLAN/gateway traffic all confirmed. See
       physical link into OPNsense. See `docs/testing-log.md` for full
       results.
 - [x] Phase 3 — Monitoring backend (Python collector, SQLite) — complete (`collector/`): 19 unit tests pass, and a live run on the lab recorded device and internet checks plus OPNsense firewall events received over remote syslog
-- [ ] Phase 4 — React dashboard + alerting
+- [x] Phase 4 — React dashboard + alerting — complete: FastAPI API, React dashboard (`dashboard/`) and alert engine with 38 unit tests; running on the lab, where it caught and later cleared two real gateway-offline alerts (see Lessons Learned). Discord webhook delivery not yet tested
 - [ ] Phase 5 — Config backup automation + final documentation
 
 ## Setup / Reproduction
@@ -178,6 +178,28 @@ Full log: [`docs/testing-log.md`](docs/testing-log.md)
   configuration issue — confirmed by OPNsense's own WAN-side ping tests
   and a full traceroute successfully reaching `8.8.8.8` through the
   carrier network.
+
+- **The monitor flagged a "failure" that was my own firewall policy.** The
+  dashboard showed the IoT and Lab gateways offline while DNS through them
+  worked. The `block private network` rules (RFC1918 includes each
+  gateway's own address) silently dropped the monitoring host's pings, and
+  because those rules had logging off, Live View showed nothing. Turning
+  logging on exposed the `block` hits at once. Fix: a narrow, logged pass
+  rule above each block rule (ICMP echo from the monitoring host only, to
+  This Firewall). Lesson: a block rule without logging is invisible, and an
+  empty log is not proof that no traffic arrived.
+- **A switch VLAN setting leaked the home LAN into IoT.** Firewall logs
+  showed `192.168.50.x` broadcast and multicast arriving on the IoT
+  interface. On the TL-SG108E, ports 3-7 were still untagged members of
+  VLAN 1 as well as their own VLAN, so VLAN 1 traffic left through them.
+  Removing them (VLAN 1 on ports 1-2 only, after confirming every PVID)
+  ended it. Lesson: check PVID *and* membership, and save the switch config.
+- **The monitor was measuring the wrong internet path.** A third USB
+  adapter connected the host straight to the home router and tied the
+  Trusted adapter's route metric, so Windows sent the collector's internet
+  pings around OPNsense. Setting the Trusted adapter's metric lowest
+  (10, with the home-router adapter at 40 as a backup) put the checks back
+  on the OPNsense WAN. Earlier internet figures are not a clean baseline.
 
 Full details: [`docs/testing-log.md`](docs/testing-log.md)
 

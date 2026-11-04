@@ -47,6 +47,21 @@ CREATE TABLE IF NOT EXISTS fw_events (
     dst_port  INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_fw_events_ts ON fw_events(ts);
+
+-- One row per critical incident. Opened and resolved by netmon.alerts.
+-- notified_*: 0 = pending, 1 = sent, 2 = skipped (no webhook configured)
+CREATE TABLE IF NOT EXISTS alerts (
+    id                INTEGER PRIMARY KEY,
+    key               TEXT NOT NULL,      -- e.g. device:IoT gateway, internet, dns
+    severity          TEXT NOT NULL,      -- critical
+    title             TEXT NOT NULL,
+    detail            TEXT,
+    opened_ts         REAL NOT NULL,
+    resolved_ts       REAL,               -- NULL while still open
+    notified_open     INTEGER NOT NULL DEFAULT 0,
+    notified_resolved INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_open ON alerts(resolved_ts, key);
 """
 
 

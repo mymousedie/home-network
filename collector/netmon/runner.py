@@ -4,15 +4,17 @@
 
 Every interval it pings each configured device and the internet targets,
 times a DNS lookup, and stores the results. If syslog is enabled, a
-background thread also records OPNsense firewall log events.
+background thread also records OPNsense firewall log events. After each
+cycle the alert engine opens/clears critical alerts and posts to Discord.
 """
 import argparse
 import json
+import os
 import signal
 import sys
 import threading
 
-from . import checks, db, syslog_listener
+from . import alerts, checks, db, notify, syslog_listener
 
 
 def load_config(path):
@@ -23,6 +25,8 @@ def load_config(path):
     cfg.setdefault("devices", [])
     cfg.setdefault("internet", {})
     cfg.setdefault("syslog", {"enabled": False})
+    # Secrets (Discord webhook) live in a .env next to the config.
+    notify.load_env_file(os.path.join(os.path.dirname(os.path.abspath(path)), ".env"))
     return cfg
 
 
@@ -68,6 +72,11 @@ def main(argv=None):
     print(f"collecting every {cfg['interval_seconds']}s -> {cfg['db_path']} (Ctrl+C to stop)")
     while not stop.is_set():
         run_once(conn, cfg, device_ids)
+        try:
+            for line in alerts.evaluate(conn, cfg):
+                print(line)
+        except Exception as e:  # alerting must never stop data collection
+            print(f"alert evaluation failed: {e}", file=sys.stderr)
         if args.once:
             break
         stop.wait(cfg["interval_seconds"])

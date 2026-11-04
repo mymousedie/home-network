@@ -84,6 +84,13 @@ the switch, instead of one tagged trunk carrying all three.
 | 7 | **OPNsense Trusted link** — host's built-in Realtek NIC → em1 | 10 | Untagged | 10 |
 | 8 | **OPNsense Lab link** — USB-Ethernet adapter #2 → em3 | 30 | Untagged | 30 |
 
+**VLAN 1 membership:** only ports 1 and 2 are members of the default VLAN.
+Ports 3-8 are untagged members of their own VLAN only. (On 2026-11-03 the
+switch was found with ports 3-7 still in VLAN 1 as well, which let
+home-LAN broadcasts and multicast from `192.168.50.x` flow out the IoT
+uplink into `em2`; see Change Log and testing-log.md.) Save the switch
+config after any change (System Tools > Save Config) or it can revert.
+
 Each OPNsense-facing port (6, 7, 8) is bridged in VirtualBox to one physical
 host NIC with Promiscuous Mode "Allow All," then assigned directly to its
 OPNsense interface — no VLAN tagging or sub-interfaces are involved on
@@ -105,17 +112,28 @@ DHCP range).
 | Source VLAN | Allowed | Blocked |
 |---|---|---|
 | Trusted | Any (internet + all local VLANs) | — |
-| IoT | DNS to own gateway (10.10.20.1:53); internet | All RFC1918 destinations, including other VLANs and ICMP to own gateway |
-| Lab | DNS to own gateway (10.10.30.1:53); internet | All RFC1918 destinations, including other VLANs and ICMP to own gateway |
+| IoT | DNS to own gateway (10.10.20.1:53); ICMP echo from the monitoring host only (10.10.20.100) to the firewall; internet | All other RFC1918 destinations, including other VLANs and ICMP to own gateway from any other device |
+| Lab | DNS to own gateway (10.10.30.1:53); ICMP echo from the monitoring host only (10.10.30.100) to the firewall; internet | All other RFC1918 destinations, including other VLANs and ICMP to own gateway from any other device |
 
 Actual OPNsense rule order per interface (top to bottom, first match wins):
 
 **IoT:**
 1. Pass — IoT net → IoT address, port 53 (DNS)
-2. Block — IoT net → RFC1918 alias
-3. Pass — IoT net → any (internet)
+2. Pass — `10.10.20.100` → This Firewall, ICMP echo request, logged
+   (`IoT - monitor pings`, added 2026-11-03)
+3. Block — IoT net → RFC1918 alias
+4. Pass — IoT net → any (internet)
 
-**Lab:** same pattern, scoped to Lab net / Lab address.
+**Lab:** same pattern, scoped to Lab net / Lab address, with
+`Lab - monitor pings` allowing `10.10.30.100` → This Firewall (ICMP echo).
+
+The monitoring host (the Windows machine running the collector) is a DHCP
+client on every VLAN through its bridged adapters, so the ping rules are
+keyed to its addresses. Both addresses should be pinned with Kea DHCP
+reservations (TODO: confirm they are in place) so the rules cannot silently
+stop matching when a lease changes. The rule is
+deliberately narrow: other devices on those VLANs still cannot ping their
+gateway.
 
 A custom **RFC1918** firewall alias was created (`10.0.0.0/8`,
 `172.16.0.0/12`, `192.168.0.0/16`) since OPNsense has no built-in alias for
@@ -162,3 +180,4 @@ interface instead, and OPT4 was deleted after being unassigned.
 | 2026-10-14 | OPT4 management interface added (em2, Internal Network `intnet`) so the GUI stays reachable with LAN dedicated to the physical trunk |
 | 2026-10-16/17 | Firewall rules for Trusted/IoT/Lab built and fully verified with a VLAN-tagged test client; fixed a NIC driver VLAN-tagging setting and a Kea DHCP vs. Dnsmasq port-67 conflict along the way — see testing-log.md |
 | 2026-10-25/26 | **Topology rebuild.** Root-caused a VirtualBox-on-Windows bridging limitation that silently dropped 802.1Q-tagged frames between the host NIC and the guest VM (confirmed via Wireshark). Abandoned the single tagged-trunk design; rebuilt the network so each VLAN has its own dedicated untagged physical link (switch ports 6/7/8 → em2/em1/em3) via two added USB-to-Ethernet adapters. Retired `vlan0.x` sub-interfaces and the OPT4/management interface. Re-verified Trusted/IoT/Lab end-to-end on real physical client hardware. Full narrative in testing-log.md. |
+| 2026-11-03 | **Monitor access and switch cleanup.** The dashboard showed the IoT and Lab gateways offline. Cause: the `block private network` rules (RFC1918 includes each gateway address) silently dropped the monitoring host's pings; the rules had logging off, so Live View showed nothing. Added narrow, logged `monitor pings` pass rules above the block rules (Kea reservations for the host's IoT/Lab addresses still to confirm). Same investigation found ports 3-7 still untagged members of VLAN 1 on the switch (home-LAN traffic reaching `em2`); removed them, leaving VLAN 1 on ports 1-2. Host route metrics reordered so the Trusted adapter carries internet traffic. Details in testing-log.md. |

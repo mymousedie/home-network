@@ -724,3 +724,64 @@ the first run was short and overlapped VM start-up, so it is not a baseline.
 No em2 or em3 events yet because no client was generating traffic on those
 VLANs. Next: a longer run for a real baseline, and a Lab client to produce
 em3 block entries.
+
+## 2026-10-31 — Phase 4: alert engine, API and dashboard
+
+Added alerting (`netmon/alerts.py`), a read-only FastAPI backend
+(`netmon/api.py`) and a React dashboard (`dashboard/`). `python -m unittest
+discover -s tests -t .` now runs 38 tests, all passing (1 skipped: live
+loopback ping, no `ping` binary in the build container).
+
+| Area | Verified |
+|---|---|
+| Alert engine | A device alert needs 3 consecutive failures; one alert opens per condition and is not re-sent while it persists; it resolves when the condition clears; thresholds, windows and minimum-check counts behave; a dead webhook cannot raise |
+| API | Every endpoint against a seeded database: uptime and loss maths, only unresolved alerts count as active, time series are ordered and bucketed, bad `hours` values are rejected, a path-traversal request cannot read files outside the dashboard folder |
+| Dashboard | Built with Vite and rendered in a headless browser against generated demo data (`python -m netmon.demo`) in light and dark mode with no console errors; chart tooltips, the Show table toggle and the stale-collector banner checked |
+| Palette | The two series colors used for ping targets pass the CVD and contrast checks in both themes |
+
+Known limits: tooltips on the firewall column chart only appear over buckets
+that contain data; DNS failures are not alerted on (a failed lookup is stored
+the same as one that was not run); the API has no authentication, so it binds
+to localhost.
+
+Still to verify on the real lab: run collector, API and dashboard together
+for a few hours, deliberately unplug a device to confirm a `device_down`
+alert opens and resolves, and test the Discord webhook.
+
+## 2026-11-03 — Phase 4 live: gateways "offline", switch VLAN leak, wrong route
+
+The dashboard raised "IoT gateway is offline" and "Lab gateway is offline"
+(plus a 10-50% loss reading on Trusted). Interfaces `em2`/`em3` were active
+and the host's adapters had their VLAN addresses, so this was investigated
+layer by layer.
+
+| Check | Result | Meaning |
+|---|---|---|
+| `ping -n 50 10.10.10.1` from host | 0% loss, avg 5 ms | Trusted path healthy; the dashboard 50% was a stale window |
+| `ping 10.10.20.1`, `10.10.30.1` from host | 100% loss | Real failure for IoT and Lab |
+| `arp -a` on the host | Gateway MACs matched the VM's Adapter 3 and 4 MACs | Layer 2 and the VirtualBox adapter mapping were correct |
+| IoT Live View | Only DNS replies passing; no ICMP entries at all | Pings were dropped by a rule that was not logging |
+| IoT Live View after turning on Log for `block private network` | ICMP from `10.10.20.100` blocked by that rule | Root cause confirmed |
+| IoT Live View | Default-deny hits from `192.168.50.54` and `192.168.50.1` | Home-LAN traffic was reaching `em2` |
+| Switch 802.1Q page | VLAN 1 untagged on ports 1-7 | Second root cause: ports 3-7 were in VLAN 1 too |
+| `Find-NetRoute 8.8.8.8` | Out Ethernet 5 via `192.168.50.1` (metric tie at 25) | Internet checks bypassed OPNsense |
+
+Fixes applied and re-verified:
+
+1. **Monitor pings.** Added `IoT - monitor pings` and `Lab - monitor pings`
+   (ICMP echo from `10.10.20.100` / `10.10.30.100` to This Firewall, logged)
+   above each block rule. Live View then showed `pass` entries for both
+   VLANs and the offline alerts cleared.
+2. **Switch.** Reduced VLAN 1 to ports 1-2; PVIDs confirmed 3/7=10, 4/6=20,
+   5/8=30, 1/2=1. The `192.168.50.x` entries stopped appearing on IoT.
+3. **Host routing.** Trusted adapter metric 10, home-router adapter 40;
+   `Find-NetRoute 8.8.8.8` now exits the Trusted adapter via `10.10.10.1`.
+
+Not yet done:
+
+- [ ] Confirm Kea DHCP reservations for the host's IoT and Lab adapters
+- [ ] Intermittent DNS on the Trusted VLAN: compare
+      `nslookup google.com 10.10.10.1` with `nslookup google.com 8.8.8.8`;
+      if only OPNsense is slow, enable Unbound query forwarding
+- [ ] Multi-hour baseline now that the internet checks use the OPNsense path
+- [ ] Test the Discord webhook

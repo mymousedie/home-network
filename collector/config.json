@@ -17,5 +17,33 @@
     "enabled": true,
     "bind": "0.0.0.0",
     "port": 5514
+  },
+  "vlans": [
+    {"id": 1,  "name": "Default/Mgmt", "subnet": "192.168.50.0/24", "iface": null},
+    {"id": 10, "name": "Trusted",      "subnet": "10.10.10.0/24",   "iface": "em1"},
+    {"id": 20, "name": "IoT",          "subnet": "10.10.20.0/24",   "iface": "em2"},
+    {"id": 30, "name": "Lab",          "subnet": "10.10.30.0/24",   "iface": "em3"}
+  ],
+  "wan_iface": "em0",
+  "switch": {
+    "name": "TL-SG108E",
+    "ports": [
+      {"port": 1, "label": "ASUS router",            "vlan": 1,  "device": "ASUS router"},
+      {"port": 2, "label": "Main desktop PC",        "vlan": 1,  "device": null},
+      {"port": 3, "label": "Trusted test laptop",    "vlan": 10, "device": null},
+      {"port": 4, "label": "IoT test laptop",        "vlan": 20, "device": null},
+      {"port": 5, "label": "Lab test laptop",        "vlan": 30, "device": null},
+      {"port": 6, "label": "OPNsense IoT (em2)",     "vlan": 20, "device": "IoT gateway"},
+      {"port": 7, "label": "OPNsense Trusted (em1)", "vlan": 10, "device": "Trusted gateway"},
+      {"port": 8, "label": "OPNsense Lab (em3)",     "vlan": 30, "device": "Lab gateway"}
+    ]
+  },
+  "alerts": {
+    "down_after_failures": 3,
+    "recent_checks": 10,
+    "rtt_warn_ms": 150,
+    "loss_warn_pct": 20,
+    "notify_recovery": true,
+    "discord_mention": "@here"
   }
 }

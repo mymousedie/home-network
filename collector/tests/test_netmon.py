@@ -6,7 +6,7 @@ import threading
 import time
 import unittest
 
-from netmon import checks, db, report, runner, syslog_listener
+from netmon import alerts, checks, db, report, runner, status, syslog_listener
 
 WIN_OK = "Reply from 8.8.8.8: bytes=32 time=27ms TTL=250"
 WIN_FAST = "Reply from 10.10.10.1: bytes=32 time<1ms TTL=64"
@@ -227,6 +227,160 @@ class RunnerCycle(unittest.TestCase):
         runner.run_once(conn, cfg, ids)
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM device_checks").fetchone()[0], 1)
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM internet_checks").fetchone()[0], 1)
+
+
+STATUS_CFG = {
+    "interval_seconds": 30,
+    "devices": [{"name": "gw", "ip": "10.10.20.1", "vlan": 20}],
+    "internet": {"ping_targets": ["8.8.8.8", "1.1.1.1"],
+                 "dns_server": "10.10.10.1", "dns_name": "google.com"},
+    "vlans": [{"id": 20, "name": "IoT", "subnet": "10.10.20.0/24", "iface": "em2"}],
+    "wan_iface": "em0",
+    "switch": {"name": "sw", "ports": [
+        {"port": 6, "label": "IoT link", "vlan": 20, "device": "gw"},
+        {"port": 3, "label": "laptop", "vlan": 20, "device": None},
+    ]},
+    "alerts": {"down_after_failures": 3},
+}
+
+
+class StatusClassify(unittest.TestCase):
+    s = status.alert_settings(STATUS_CFG)
+
+    def test_unknown_when_empty(self):
+        self.assertEqual(status.classify([], self.s)[0], "unknown")
+
+    def test_single_miss_is_degraded_not_offline(self):
+        self.assertEqual(status.classify([(False, None), (True, 1.0)], self.s)[0], "degraded")
+
+    def test_threshold_misses_is_offline(self):
+        recent = [(False, None)] * 3 + [(True, 1.0)]
+        self.assertEqual(status.classify(recent, self.s)[0], "offline")
+
+    def test_high_latency_is_degraded(self):
+        self.assertEqual(status.classify([(True, 400.0)] * 5, self.s)[0], "degraded")
+
+    def test_healthy(self):
+        self.assertEqual(status.classify([(True, 2.0)] * 10, self.s)[0], "online")
+
+
+class AlertEngine(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.mkdtemp()
+        self.conn = db.connect(os.path.join(tmp, "a.db"))
+        self.did = db.upsert_device(self.conn, "gw", "10.10.20.1", 20)
+        self.sent = []
+        self.discord_up = True
+        os.environ["NETMON_DISCORD_WEBHOOK"] = "https://example.invalid/hook"
+        self.t = time.time()
+
+    def tearDown(self):
+        os.environ.pop("NETMON_DISCORD_WEBHOOK", None)
+
+    def send(self, url, title, desc, **kw):
+        if not self.discord_up:
+            return False, "offline"
+        self.sent.append(title)
+        return True, None
+
+    def cycle(self, dev_up, inet_up=True, dns_ok=True):
+        self.t += 30
+        db.record_device_check(self.conn, self.did, dev_up, 1.0 if dev_up else None, ts=self.t)
+        for i, tgt in enumerate(STATUS_CFG["internet"]["ping_targets"]):
+            dns = (5.0 if dns_ok else None) if i == 0 else None
+            db.record_internet_check(self.conn, tgt, inet_up, 10.0 if inet_up else None, dns, ts=self.t)
+        return alerts.evaluate(self.conn, STATUS_CFG, now=self.t, send=self.send)
+
+    def test_device_down_opens_once_and_resolves(self):
+        for _ in range(5):
+            self.cycle(False)
+        self.assertEqual(self.sent, ["🔴 gw is offline"])
+        self.cycle(True)
+        self.assertEqual(self.sent, ["🔴 gw is offline", "🟢 Resolved: gw is offline"])
+        rows = self.conn.execute("SELECT * FROM alerts").fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertIsNotNone(rows[0]["resolved_ts"])
+
+    def test_two_misses_do_not_alert(self):
+        self.cycle(False)
+        self.cycle(False)
+        self.cycle(True)
+        self.assertEqual(self.sent, [])
+
+    def test_internet_down_notification_is_delivered_after_recovery(self):
+        self.discord_up = False  # Discord is unreachable while the internet is down
+        for _ in range(4):
+            self.cycle(True, inet_up=False, dns_ok=False)
+        self.assertEqual(self.sent, [])
+        self.discord_up = True
+        self.cycle(True)
+        self.assertIn("🟢 Recovered: Internet is down", self.sent)
+        self.assertIn("🟢 Recovered: DNS is failing", self.sent)
+        pending = self.conn.execute(
+            "SELECT COUNT(*) FROM alerts WHERE notified_open=0 OR notified_resolved=0"
+        ).fetchone()[0]
+        self.assertEqual(pending, 0)
+
+    def test_no_webhook_marks_skipped(self):
+        os.environ.pop("NETMON_DISCORD_WEBHOOK")
+        for _ in range(3):
+            self.cycle(False)
+        row = self.conn.execute("SELECT notified_open FROM alerts").fetchone()
+        self.assertEqual(row["notified_open"], 2)
+        self.assertEqual(self.sent, [])
+
+
+try:
+    from fastapi.testclient import TestClient
+    from netmon import api
+except ImportError:  # API deps are optional for the collector
+    TestClient = None
+
+
+@unittest.skipIf(TestClient is None, "fastapi not installed")
+class Api(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.mkdtemp()
+        cfg = dict(STATUS_CFG, db_path=os.path.join(tmp, "api.db"))
+        conn = db.connect(cfg["db_path"])
+        did = db.upsert_device(conn, "gw", "10.10.20.1", 20)
+        now = time.time()
+        for i in range(3):
+            db.record_device_check(conn, did, False, None, ts=now - i)
+            db.record_internet_check(conn, "8.8.8.8", True, 12.0, 4.0, ts=now - i)
+            db.record_internet_check(conn, "1.1.1.1", True, 9.0, None, ts=now - i)
+        for line in (FL_BLOCK_TCP, FL_BLOCK_TCP, FL_PASS_DNS):
+            db.record_fw_event(conn, syslog_listener.parse_filterlog(line), ts=now)
+        conn.close()
+        self.client = TestClient(api.create_app(cfg, dist_dir=tmp))
+
+    def test_overview_ports_and_vlans(self):
+        r = self.client.get("/api/overview").json()
+        self.assertEqual(r["internet"]["status"], "online")
+        ports = {p["port"]: p["status"] for p in r["switch"]["ports"]}
+        self.assertEqual(ports, {6: "disconnected", 3: "unmonitored"})
+        iot = r["vlans"][0]
+        self.assertEqual(iot["status"], "offline")
+        self.assertEqual(iot["firewall"], {"pass": 0, "block": 2})
+
+    def test_firewall_events_filter_by_vlan_and_action(self):
+        r = self.client.get("/api/firewall/events", params={"vlan": 20, "action": "block"}).json()
+        self.assertEqual(r["total"], 2)
+        self.assertEqual(r["rows"][0]["iface_label"], "IoT")
+        r = self.client.get("/api/firewall/events", params={"q": "443"}).json()
+        self.assertEqual(r["total"], 2)
+
+    def test_top_blocked_sources(self):
+        rows = self.client.get("/api/firewall/top").json()["rows"]
+        self.assertEqual(rows[0]["addr"], "10.10.20.101")
+        self.assertEqual(rows[0]["n"], 2)
+
+    def test_unknown_vlan_404(self):
+        self.assertEqual(self.client.get("/api/firewall/events?vlan=99").status_code, 404)
+
+    def test_test_notification_without_webhook(self):
+        os.environ.pop("NETMON_DISCORD_WEBHOOK", None)
+        self.assertEqual(self.client.post("/api/notifications/test").status_code, 400)
 
 
 if __name__ == "__main__":
