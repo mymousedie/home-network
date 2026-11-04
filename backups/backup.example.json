@@ -1,0 +1,14 @@
+{
+  "url": "https://10.10.10.1",
+  "endpoint": "/api/core/backup/download/this",
+  "api_key": "",
+  "api_secret": "",
+  "tls_fingerprint": "",
+  "ca_file": "",
+  "verify_tls": true,
+  "backup_dir": "~/opnsense-backups",
+  "keep_days": 30,
+  "keep_min": 5,
+  "redacted_path": "../config-backups/config-redacted.xml",
+  "discord_webhook": ""
+}

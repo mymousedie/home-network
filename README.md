@@ -210,6 +210,3 @@ Full details: [`docs/testing-log.md`](docs/testing-log.md)
 - Automated OPNsense config backups
 - Basic anomaly alerting (Discord/email)
 
-## License
-
-MIT

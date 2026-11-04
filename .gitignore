@@ -52,3 +52,6 @@ desktop.ini
 *.vdi
 *.vbox
 *.vbox-prev
+
+# --- OPNsense backup script (holds API key/secret) ---
+backups/backup.json
