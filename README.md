@@ -74,7 +74,7 @@ reachability, and blocking of cross-VLAN/gateway traffic all confirmed. See
       results.
 - [x] Phase 3 — Monitoring backend (Python collector, SQLite) — complete (`collector/`): 19 unit tests pass, and a live run on the lab recorded device and internet checks plus OPNsense firewall events received over remote syslog
 - [x] Phase 4 — React dashboard + alerting — complete: FastAPI API, React dashboard (`dashboard/`) and alert engine with 38 unit tests; running on the lab, where it caught and later cleared two real gateway-offline alerts (see Lessons Learned). Discord webhook delivery not yet tested
-- [ ] Phase 5 — Config backup automation + final documentation
+- [X] Phase 5 — Config backup automation + final documentation
 
 ## Setup / Reproduction
 
